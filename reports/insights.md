@@ -1,261 +1,133 @@
-# Olist E-Commerce Performance & Customer Analytics
+# Business Insights & Strategic Recommendations Report — Olist E-Commerce (2017–2018)
 
-**SQL · Python · Power BI**
-
-> **Executive summary:** End-to-end analysis of **99,441 Brazilian e-commerce orders** (Olist, 2016–2018) using **PostgreSQL**, **Python (pandas, SciPy)** and **Power BI**. The project examines revenue growth, revenue concentration (Pareto), delivery performance and its relationship with customer reviews, repeat-purchase behavior, and installment payment patterns, and turns each finding into an actionable recommendation.
-
----
-
-## Table of Contents
-
-1. [Business Context](#1-business-context)
-2. [Dataset & Architecture](#2-dataset--architecture)
-3. [Metric Definitions & Analytical Guardrails](#3-metric-definitions--analytical-guardrails)
-4. [Key Findings & Recommendations](#4-key-findings--recommendations)
-5. [Methods & Technical Implementation](#5-methods--technical-implementation)
-6. [Repository Structure & How to Reproduce](#6-repository-structure--how-to-reproduce)
-7. [Limitations & Next Steps](#7-limitations--next-steps)
-8. [Tech Stack & Author](#8-tech-stack--author)
+**Prepared by:** Data Analyst Intern  
+**Observation Window:** January 2017 – August 2018 (20 complete operating months; full dataset spans September 2016 – October 2018)  
+**Scope:** 98,207 valid orders | 13,494,400.74 BRL Gross Merchandise Value (GMV) | 94,990 unique customers  
+**Tech Stack:** PostgreSQL · Python (pandas, SciPy) · Power BI  
 
 ---
 
-## 1. Business Context
+## 1. Executive Summary
 
-Acting as a **Data Analyst Intern** for Olist, a Brazilian e-commerce marketplace that connects small businesses to major retail channels, this project answers five strategic questions for leadership:
+An end-to-end analysis of **98,207 valid orders** (generating **13.49 million BRL** in product revenue, excluding shipping freight) reveals that Olist achieved rapid top-line expansion throughout 2017—scaling monthly revenue nearly **8x**—before stabilizing at a high operational plateau of **838k–994k BRL/month** in 2018.
 
-| # | Theme | Question |
-|---|---|---|
-| **Q1** | Growth & basket size | How do monthly revenue, order volume and Average Order Value (AOV) evolve month over month (MoM)? |
-| **Q2** | Revenue concentration | Which product categories and customer states drive most of the revenue, and how closely does performance follow the Pareto 80/20 rule? |
-| **Q3** | Logistics & customer experience | How fast are deliveries, what is the late-delivery rate, and how strongly is delivery speed associated with review scores? |
-| **Q4** | Customer retention | What share of unique customers place repeat orders (≥ 2 purchases), and how do they differ from one-time buyers? |
-| **Q5** | Payment & installments | Which payment methods and credit-card installment plans do shoppers prefer, and how does order value vary across them? |
+However, decomposing this growth exposes two structural vulnerabilities:
+1. **Acquisition-Heavy Growth Model:** Revenue expansion is driven almost entirely by new customer acquisition rather than customer retention. Only **3.04%** of unique buyers place a repeat order, and Average Order Value (**AOV**) has remained flat around **137.41 BRL**.
+2. **Logistics-Driven Satisfaction Erosion:** While **91.89%** of delivered orders arrive on or before the estimated delivery date and achieve a strong **4.29 / 5.0** average review score, the **8.11%** of orders delivered late suffer a severe rating collapse to **2.57 / 5.0** ($p < 0.001$, $\text{CLES} = 0.770$). **Rio de Janeiro (`RJ`)** stands out as the single largest operational bottleneck by volume, generating **~1,664 late orders** (a **13.47%** late rate across 12,350 deliveries).
 
----
+### Headline KPI Scorecard
 
-## 2. Dataset & Architecture
-
-- **Source:** [Brazilian E-Commerce Public Dataset by Olist](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce) (Kaggle)
-- **License:** CC BY-NC-SA 4.0 (non-commercial, attribution required)
-- **Period covered:** September 2016 – October 2018
-
-### Verified scale
-
-Row counts were verified in PostgreSQL with `COUNT(*)` across 9 relational tables:
-
-| Table | Rows |
-|---|---:|
-| Orders | 99,441 |
-| Order items | 112,650 |
-| Payment records | 103,886 |
-| Customer reviews | 99,224 |
-| Unique customers (`customer_unique_id`) | 96,096 |
-| Products | 32,951 |
-| Sellers | 3,095 |
-| Geolocation entries | 1,000,163 |
-| Category translations | 71 |
-
-### Relational schema
-
-```text
-olist_customers ──(customer_id)── olist_orders ──(order_id)── olist_order_items ──(product_id)── olist_products ──(category)── category_translation
-                                      │                              │
-                                      │                              └──(seller_id)── olist_sellers
-                                      ├──(order_id)── olist_order_payments
-                                      └──(order_id)── olist_order_reviews
-```
-
-### Data quality audit (`sql/01_data_quality.sql`)
-
-| Area | Finding | Treatment |
-|---|---|---|
-| **Sparse boundary months** | Raw data spans 2016-09 to 2018-10, but 2016-09 to 2016-12 (329 orders in total) and 2018-09 to 2018-10 (20 orders in total) are severely truncated. | Trend analyses use the **20 complete months (2017-01 to 2018-08)**. |
-| **Order status & empty orders** | Of 99,441 orders, 96,478 (97.0%) are delivered, 625 are canceled and 609 are unavailable. 775 orders have no line items (primarily canceled/unavailable). | Canceled and unavailable orders are excluded from revenue metrics. |
-| **One-to-many join traps** | 2,961 orders contain multiple payment rows (e.g., credit card + voucher) and 547 orders contain multiple reviews. | Every table is aggregated or deduplicated to the `order_id` grain before joining, preventing double-counting of GMV. |
-| **Customer identifier granularity** | 99,441 order-level `customer_id` values map to 96,096 distinct individuals (`customer_unique_id`), i.e. 3,345 repeat-order instances. | Customers are counted via `customer_unique_id` only. |
-| **Missing values & untranslated categories** | 2,965 orders lack `order_delivered_customer_date` (including 8 orders marked delivered). 610 products have no category name, and 2 Portuguese categories (`pc_gamer`, `portateis_cozinha_e_preparadores_de_alimentos`) have no English translation. | Orders without a delivery date are excluded from transit-time calculations. Missing categories are labeled `unknown`. |
-| **Financial cross-check** | Comparing `SUM(price + freight_value)` with `SUM(payment_value)` across 98,665 orders gives 99.75% reconciliation; only 249 orders differ by more than 1 BRL (vouchers and minor adjustments). | Item-level values are treated as reliable for revenue analysis. |
+| Business Dimension | Core Metric | Verified Value | Analytical Benchmark / Context |
+| :--- | :--- | :--- | :--- |
+| **Scale & Revenue** | Total Valid Orders | **98,207** | Excludes 625 `canceled` & 609 `unavailable` orders |
+| **Scale & Revenue** | Total Merchandise Revenue (GMV) | **13,494,400.74 BRL** | Product `price` only (shipping freight tracked separately) |
+| **Order Economics** | Overall Average Order Value (AOV) | **137.41 BRL** | Narrow monthly band of 124.76 – 152.60 BRL |
+| **Concentration** | Top Category Share (Pareto) | **81.26%** | Driven by **18 of 74** categories (24.3%) |
+| **Concentration** | Top State Share (Pareto) | **81.47%** | Driven by **7 of 27** states; `SP` alone = **38.27%** |
+| **Logistics & CX** | Late Delivery Rate | **8.11%** | 7,826 late vs. 88,644 on-time (`delivered` orders) |
+| **Logistics & CX** | Review Score Gap (On-Time vs. Late) | **4.29 vs. 2.57** | **-1.72 pts** drop; 1–2 star share jumps 9.22% $\rightarrow$ 54.07% |
+| **Retention** | Repeat Customer Rate ($\ge 2$ orders) | **3.04%** | 2,888 of 94,990 unique buyers (6.22% of total orders) |
+| **Payments** | Credit Card Adoption & Installments | **75.47%** | **67.99%** of card orders use $\ge 2$ monthly installments |
 
 ---
 
-## 3. Metric Definitions & Analytical Guardrails
+## 2. Analytical Methodology & Data Guardrails
 
-| Item | Definition |
-|---|---|
-| **Merchandise revenue (GMV)** | `SUM(price)` in Brazilian Real (BRL). Shipping (`freight_value`) is excluded and tracked separately. |
-| **Valid orders: revenue, AOV, retention, payments (Q1, Q2, Q4, Q5)** | 98,207 orders: all orders with line items, excluding `canceled` and `unavailable`. |
-| **Valid orders: delivery & reviews (Q3)** | 96,470 delivered orders with a non-null `order_delivered_customer_date`. |
-| **Unique customers** | Counted strictly via `customer_unique_id` (94,990 unique buyers with valid orders). |
-| **Review deduplication** | For multi-review orders, only the latest response is kept: `ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY review_answer_timestamp DESC) = 1`. |
-| **Split payments** | Orders paid with several methods are classified by the primary method, i.e. the one with the highest `payment_value`. |
-| **Currency** | All monetary values are in BRL and are not converted. |
+To ensure a Single Source of Truth across SQL, Python, and Power BI, all metrics adhere to strict data-hygiene rules established during data quality auditing:
+- **Boundary Month Filtering:** Incomplete boundary months (`2016-09` to `2016-12` with 329 orders; `2018-09` to `2018-10` with 20 orders) are excluded from time-series trend analyses to prevent artificial Month-over-Month (MoM) distortions.
+- **Preventing Join Fan-Out:** Because **2,961 orders** contain multiple payment rows and **547 orders** contain multiple review entries, line items and payments are pre-aggregated to the `order_id` grain, and reviews are deduplicated via `ROW_NUMBER()` to retain only the latest customer response (`review_answer_timestamp DESC`).
+- **True Customer Granularity:** Buyers are tracked via `customer_unique_id` (96,096 distinct individuals across 99,441 total orders) rather than order-level `customer_id`.
+- **100% Revenue Preservation:** Products missing category metadata (610 items) or English translations (`pc_gamer`, `portateis_cozinha_e_preparadores_de_alimentos`) are retained via `LEFT JOIN` and `COALESCE` under `unknown` or their original Portuguese labels.
 
 ---
 
-## 4. Key Findings & Recommendations
+## 3. Detailed Findings & Strategic Recommendations
 
-> The full strategic analysis and action roadmap are in [`reports/insights.md`](reports/insights.md).
-
-### At a glance
-
-| Metric | Value |
-|---|---|
-| Peak monthly GMV | 1,003,862.14 BRL (2017-11, 7,421 orders, +52.1% MoM) |
-| Average order value | ≈ 137.41 BRL (monthly range 124.76 – 152.60) |
-| Revenue concentration | 18 of 74 categories generate 81.26% of GMV; 7 of 27 states generate 81.47% |
-| Late-delivery rate | 8.11% of delivered orders |
-| Review score: on-time vs. late | 4.29 vs. 2.57 (out of 5) |
-| Repeat-customer rate | 3.04% (2,888 of 94,990 unique buyers) |
-| Orders paid by credit card | 75.47% |
-
-### Q1 — Volume-driven growth with a flat AOV
-
-Monthly GMV grew roughly 8.4× from **120,098.27 BRL** (787 orders, 2017-01) to a peak of **1,003,862.14 BRL** (7,421 orders, 2017-11, +52.1% MoM), then plateaued between about 838k and 994k BRL per month in 2018. AOV stayed flat at around **137.41 BRL** (range 124.76–152.60 BRL), so growth came from order volume rather than larger baskets.
-
-**Recommendation:** Test a **160 BRL free-shipping threshold** and checkout cross-sell bundles to lift basket size.
-
-### Q2 — Strong 80/20 concentration across categories and states
-
-**18 of 74 categories (24.3%)** generate **81.26%** of GMV, led by `health_beauty` (1.26M BRL), `watches_gifts` (1.20M BRL) and `bed_bath_table` (1.04M BRL). Geographically, **7 of 27 states** drive **81.47%** of GMV; São Paulo (SP) alone accounts for **38.27%** (5.16M BRL) at the lowest AOV nationwide (125.57 BRL).
-
-**Recommendation:** Protect inventory depth in the top 18 categories and recruit regional sellers outside SP to reduce interstate freight barriers.
-
-### Q3 — Late deliveries are strongly associated with lower reviews
-
-| Group | Share of orders | Median transit | Avg. review | 1–2 star rate |
-|---|---:|---:|---:|---:|
-| On time | 91.89% | 9.73 days | 4.29 / 5 | 9.22% |
-| Late | 8.11% | 29.15 days | 2.57 / 5 | 54.07% |
-
-The gap is **1.72 review points**. Ratings drop sharply once transit exceeds 20 days (from 4.13 to 3.23). A Mann–Whitney U test (p < 0.001, CLES = 0.770) and a Spearman correlation (ρ = −0.33, p < 0.001) confirm a statistically significant association. These tests show association, not causation.
-
-**Recommendation:** Trigger automated **15-day transit SLA alerts** for proactive carrier escalation before orders reach the 20-day mark.
-
-### Q3 (regional) — Rio de Janeiro is the largest logistics bottleneck by volume
-
-Among major markets (≥ 500 delivered orders), **RJ** records 12,350 deliveries with a **13.47% late rate** (about 1,664 late orders), roughly 2.3× the 5.89% rate in SP.
-
-**Recommendation:** Audit SP → RJ carrier lanes and recalibrate estimated delivery buffers to manage customer expectations.
-
-### Q4 — Very low repeat rate leaves growth dependent on new acquisition
-
-Only **3.04%** (2,888 of 94,990 unique buyers) placed two or more orders, contributing 6.22% of total orders. Repeat buyers show slightly higher satisfaction (4.18 vs. 4.11) but smaller baskets (122.95 vs. 138.38 BRL), a pattern consistent with replenishment-type purchases (a hypothesis to validate).
-
-**Recommendation:** Pilot an automated **Day-14 post-delivery voucher** for 4–5 star first-time buyers in replenishable categories (`health_beauty`, `bed_bath_table`).
-
-### Q5 — Credit-card installments accompany higher-ticket orders
-
-Credit cards (75.47%) and boleto (19.90%) account for **95.37%** of orders. Among credit-card orders, **67.99%** use two or more installments, and average order value rises more than 4× from **100.78 BRL** (1 installment) to **309.00 BRL** (8) and **414.76 BRL** (10).
-
-**Recommendation:** Display 6–10× monthly installment pricing prominently on product cards for items above 200 BRL.
+### Finding 1 (Q1): Volume-Driven Hypergrowth in 2017 Followed by a 2018 Plateau, with Stagnant AOV
+- **Quantitative Evidence:** Across the 20 complete operating months (`2017-01` to `2018-08`), monthly GMV expanded nearly **8x**, rising from **120,098.27 BRL** (787 orders in `2017-01`) to an all-time peak of **1,003,862.14 BRL** (7,421 orders in `2017-11`, a **+52.1% MoM** surge over October's 660,179.62 BRL), before normalizing to **742,183.79 BRL** (-26.1% MoM) in `2017-12`. Throughout `2018-01` to `2018-08`, monthly revenue stabilized within a consistent **838k–994k BRL** band (peaking in April 2018 at **993,592.98 BRL** and May 2018 at **992,871.75 BRL**, averaging 6,145–7,187 orders/month). Throughout this entire 20-month period, AOV remained flat between **124.76 BRL** and **152.60 BRL** (trending slightly downward from ~140–152 BRL in early 2017 to ~132–145 BRL in 2018).
+- **Why It Matters:** Olist successfully scaled marketplace liquidity and order volume, but top-line growth relied entirely on transaction count rather than basket-size expansion. Once monthly order volume plateaued in 2018, stagnant AOV capped overall revenue growth.
+- **Actionable Recommendations:**
+  1. Introduce a **tiered free-shipping threshold** set ~15–20% above the current median/average basket (e.g., free shipping on orders $\ge$ **160 BRL**) to incentivize multi-item checkouts.
+  2. Deploy automated **"Frequently Bought Together" cross-sell bundles** at checkout for high-velocity categories (`health_beauty`, `bed_bath_table`).
+- **Confidence & Limitations:** **High confidence.** Complete 20-month longitudinal coverage. *Limitation:* Because the dataset ends in August 2018, Q4 2018 is unobserved, preventing multi-year seasonality verification of the November Black Friday spike (which is inferred rather than explicitly tagged in the schema).
 
 ---
 
-## 5. Methods & Technical Implementation
-
-**SQL (PostgreSQL 17)**
-Multi-table joins, CTEs, window functions (`LAG`, `ROW_NUMBER`, `SUM() OVER`, `RANK`), conditional aggregation (`FILTER`), and reusable analytical views (`v_order_fact`, `v_item_fact`).
-
-**Python (pandas, SQLAlchemy, SciPy, matplotlib, seaborn)**
-Automated ETL ingestion (`scripts/load_data.py`), SQL-vs-pandas reconciliation (0.00 BRL revenue discrepancy), visualizations, and non-parametric hypothesis testing (`notebooks/01_eda_and_validation.ipynb`).
-
-**Power BI Desktop**
-Star-schema data model (date table + fact views), custom DAX measures (Total Revenue, Total Orders, AOV, Late Delivery %, Avg Review Score, Repeat Customer %), and an interactive executive dashboard (`dashboard/olist_dashboard.pbix`).
-
----
-
-## 6. Repository Structure & How to Reproduce
-
-### Structure
-
-```text
-Olist-Ecommerce-Analysis/
-├── README.md
-├── data/
-│   ├── raw/                        # Place the 9 Kaggle CSVs here (ignored by Git)
-│   └── processed/
-├── sql/
-│   ├── 00_load_notes.md            # ETL & indexing log
-│   ├── 01_data_quality.sql         # Data auditing & financial cross-checks
-│   ├── 02_q1_monthly_revenue.sql   # Monthly revenue, orders, AOV & MoM growth
-│   ├── 03_q2_category_state.sql    # Category Pareto 80/20 & state breakdown
-│   ├── 04_q3_delivery_reviews.sql  # Delivery speed, late rate & review impact
-│   ├── 05_q4_repeat_customers.sql  # Customer retention & cohort comparison
-│   ├── 06_q5_payments.sql          # Payment methods & installment analysis
-│   └── 07_views_for_powerbi.sql    # Clean fact views for BI & Python
-├── scripts/
-│   └── load_data.py                # Automated CSV-to-PostgreSQL loader
-├── notebooks/
-│   └── 01_eda_and_validation.ipynb # Reconciliation, charts & statistical tests
-├── dashboard/
-│   ├── olist_dashboard.pbix        # Interactive Power BI report
-│   └── screenshots/
-│       └── dashboard_main.png
-├── reports/
-│   └── insights.md                 # Full business insights & action roadmap
-├── .env.example
-├── .gitignore
-└── requirements.txt
-```
-
-### Step-by-step reproduction
-
-**1. Clone the repository and install dependencies**
-
-```bash
-git clone https://github.com/07MinhQuanT1/Olist-Ecommerce-Analysis.git
-cd Olist-Ecommerce-Analysis
-
-python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# macOS / Linux:
-# source .venv/bin/activate
-
-pip install -r requirements.txt
-```
-
-**2. Configure data and environment**
-
-- Download the [Olist dataset](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce) from Kaggle and extract the 9 CSV files into `data/raw/`.
-- Create a PostgreSQL database named `olist`, copy `.env.example` to `.env`, and set your `DATABASE_URL`.
-
-**3. Run the ETL and SQL pipeline**
-
-```bash
-python scripts/load_data.py
-```
-
-Then execute `sql/01_data_quality.sql` through `sql/07_views_for_powerbi.sql` in order (for example with `psql -d olist -f <file>`).
-
-**4. Explore the notebook and dashboard**
-
-- Open `notebooks/01_eda_and_validation.ipynb` and run all cells to reproduce the reconciliation checks, charts, and Mann–Whitney / Spearman tests.
-- Open `dashboard/olist_dashboard.pbix` in Power BI Desktop to interact with the dashboard.
+### Finding 2 (Q2a): Product Revenue Follows a Strict Pareto 80/20 Concentration Across Two Distinct Merchandising Models
+- **Quantitative Evidence:** Out of **74 product categories**, just **18 categories (24.3%)** generate **81.26%** of total GMV, while the Top 5 alone account for **39.82%**: `health_beauty` (**1.26M BRL**), `watches_gifts` (**1.20M BRL**), `bed_bath_table` (**1.04M BRL**), `sports_leisure`, and `computers_accessories`. The data highlights two distinct revenue engines:
+  - *High-Volume Everyday Goods:* `bed_bath_table` leads unit volume with **11,097 items sold** at an average item price of **~93.4 BRL**.
+  - *High-Ticket Discretionary Goods:* `watches_gifts` ranks #2 in revenue with **5,970 items** (**~200.7 BRL/item**), while `computers` reaches rank #17 with only **203 items sold** (**~1,098 BRL/item**).
+  - Uncategorized items (`unknown`) rank #21 with **178,572.55 BRL** (1.32% of GMV).
+- **Why It Matters:** Nearly four-fifths of marketplace revenue depends on fewer than a quarter of categories. Supply disruptions, seller churn, or stockouts in these 18 core categories would disproportionately impact platform GMV.
+- **Actionable Recommendations:**
+  1. Prioritize seller onboarding, inventory forecasting, and seasonal promotional campaigns around the **Top 18 Pareto categories** ahead of Q4 peak demand.
+  2. Enforce mandatory category taxonomy validation during seller listing creation to eliminate the **1.32% (`unknown`)** catalog blind spot and improve search discoverability.
+- **Confidence & Limitations:** **High confidence.** 100% of line-item revenue reconciled cleanly (`13,494,400.74 BRL`). *Limitation:* Cost of Goods Sold (COGS) and seller commission take-rates are absent, so concentration is measured on gross GMV rather than net margin.
 
 ---
 
-## 7. Limitations & Next Steps
-
-**Limitations**
-
-- **Observational scope:** Findings reflect marketplace activity in Brazil during 2016–2018. The statistical tests confirm strong associations, not causal proof.
-- **Right-censoring:** Customers acquired near the end of the observation window have had less time to place repeat orders, which may understate the repeat rate.
-- **Missing cost data:** Seller COGS and margins are unavailable, so profitability cannot be assessed.
-- **Modeling assumptions:** The "latest review per order" and "primary payment method" rules are analytical choices that may affect results for the small share of orders they touch.
-
-**Next steps**
-
-- Build a monthly **cohort retention heatmap**.
-- Analyze **seller-level fulfillment SLAs**.
-- Develop a **churn / repeat-purchase propensity model**.
+### Finding 3 (Q2b): Geographic Revenue Concentrates in the Southeast While Remote States Exhibit Higher AOV
+- **Quantitative Evidence:** **7 out of 27 Brazilian states (25.9%)** generate **81.47%** of total GMV, and the Top 3 Southeast states—**São Paulo (`SP`)**, **Rio de Janeiro (`RJ`)**, and **Minas Gerais (`MG`)**—account for **63.35%**. `SP` alone contributes **38.27%** (**5.16M BRL** across **41,125 orders**) but records the lowest AOV nationwide at **125.57 BRL**. Conversely, remote Northern and Northeastern states exhibit **55–72% higher AOV**, such as Paraíba (`PB`: **216.34 BRL**), Amapá (`AP`: **198.15 BRL**), and Acre (`AC`: **197.32 BRL**).
+- **Why It Matters:** Heavy dependence on `SP` exposes Olist to regional macroeconomic fluctuations. Meanwhile, the inverse relationship between proximity and AOV indicates that customers in remote regions consolidate purchases into higher-value baskets to amortize high interstate shipping fees and longer transit times.
+- **Actionable Recommendations:**
+  1. Recruit regional sellers and establish fulfillment hubs outside `SP` (particularly in the South and Northeast) to lower interstate freight costs and unlock high-frequency, everyday purchasing in underpenetrated states.
+  2. Tailor digital marketing in remote high-AOV states toward higher-ticket durable goods where shipping fees represent a smaller fraction of total order value.
+- **Confidence & Limitations:** **High confidence.** *Limitation:* Analysis reflects customer state (`customer_state`); cross-border seller-to-customer lane distances were not modeled at the zip-code level due to duplicate coordinate entries in `olist_geolocation`.
 
 ---
 
-## 8. Tech Stack & Author
+### Finding 4 (Q3a): Late Deliveries Trigger a Severe Review Collapse, with a Sharp Inflection Point Beyond 20 Days
+- **Quantitative Evidence:** Among **96,470 delivered orders** with valid timestamps:
+  - **On-Time Deliveries (91.89%, 88,644 orders):** Median transit time is **9.73 days**, yielding a **4.29 / 5.0** average review score and a **9.22%** rate of poor ratings (1–2 stars).
+  - **Late Deliveries (8.11%, 7,826 orders):** Median transit time triples to **29.15 days**, causing the average review score to plummet by **1.72 points** to **2.57 / 5.0**, while the 1–2 star rating rate surges nearly sixfold to **54.07%**.
+  - **Statistical Validation:** A two-sided **Mann–Whitney U test** confirms the difference is highly significant ($p < 0.001$), with a Common Language Effect Size (**$\text{CLES} = 0.770$**)—meaning a randomly selected on-time order has a **77.0% probability** of receiving a higher review score than a late order. **Spearman rank correlation ($\rho = -0.33, p < 0.001$)** confirms a moderate negative monotonic relationship between transit duration and satisfaction.
+  - **20-Day Cliff Effect:** Customer ratings erode gradually across transit buckets up to 20 days (`<= 5 days`: **4.45** $\rightarrow$ `6–10 days`: **4.36** $\rightarrow$ `11–15 days`: **4.27** $\rightarrow$ `16–20 days`: **4.13**), but suffer a sharp **-0.90 point drop** to **3.23** once delivery exceeds **20 days** (which affects **14.63%** of all delivered orders).
+- **Why It Matters:** Delivery reliability is the single strongest operational driver of customer sentiment. Beyond the 20-day threshold, customer patience breaks down regardless of promised delivery dates, generating severe brand damage and deterring repeat purchases.
+- **Actionable Recommendations:**
+  1. Implement an automated **15-day transit SLA alert** to flag in-transit orders approaching the 20-day cliff for proactive carrier escalation and customer notification.
+  2. Penalize chronic late-dispatch sellers in search ranking algorithms and incentivize fast carrier handoffs (within 24–48 hours of order approval).
+- **Confidence & Limitations:** **High statistical confidence; correlational interpretation.** *Limitation:* Because this is an observational study, results establish a strong statistical association rather than strict causality—unobserved confounders such as product fragility, seller packaging quality, and regional expectations may also influence review scores.
 
-**Tools:** PostgreSQL 17 · Python 3.13 (pandas, SQLAlchemy, SciPy, matplotlib, seaborn) · Power BI Desktop (DAX, Power Query) · Git / GitHub
+---
 
-**Author:** Le Minh Quan — [GitHub](https://github.com/07MinhQuanT1) · [LinkedIn](https://www.linkedin.com/in/mquan007) 
+### Finding 5 (Q3b): Rio de Janeiro (`RJ`) Represents the Single Largest Operational Bottleneck by Volume
+- **Quantitative Evidence:** Among states with substantial volume ($\ge 500$ delivered orders), remote Northeastern states exhibit the highest relative delay percentages—led by Maranhão (`MA`: **19.65%**), Ceará (`CE`: **15.36%**), and Bahia (`BA`: **14.04%**). However, **Rio de Janeiro (`RJ`)** ranks #4 in late percentage at **13.47%** across **12,350 delivered orders**—making it Olist's second-largest market overall (~3.8x the volume of `BA` and ~17x `MA`) and generating **~1,664 late orders** (more than **2.3x** `SP`'s **5.89%** late rate).
+- **Why It Matters:** While Northeastern states look worst on a percentage basis, optimizing logistics into `RJ` addresses the largest absolute concentration of dissatisfied customers on the platform.
+- **Actionable Recommendations:**
+  1. Audit third-party carrier performance specifically on **`SP` $\rightarrow$ `RJ` interstate corridors** and reallocate volume away from underperforming logistics partners.
+  2. Recalibrate `order_estimated_delivery_date` buffers for `RJ` and Northeast routes so promised delivery windows reflect realistic transit times, preventing expectation misses.
+- **Confidence & Limitations:** **High confidence** (large sample size of 12,350 orders in `RJ`). *Limitation:* The public dataset does not expose carrier IDs (`carrier_id`), preventing direct attribution of delays to specific courier companies.
 
-**Acknowledgements:** Data provided by Olist via Kaggle, used under CC BY-NC-SA 4.0.
+---
+
+### Finding 6 (Q4): Ultra-Low Repeat Purchase Rate (3.04%) Leaves Growth Dependent on Costly Customer Acquisition
+- **Quantitative Evidence:** Out of **94,990 unique customers** with valid orders, **96.96%** (92,102 buyers) purchased only once. Only **3.04%** (2,888 buyers: 2,652 with 2 orders [2.79%] and 236 with $\ge 3$ orders [0.25%]) returned for a second purchase, contributing **6.22%** of total valid orders. Comparing cohorts reveals that repeat buyers leave slightly higher review scores (**4.18 vs. 4.11**) but exhibit a lower AOV (**122.95 BRL vs. 138.38 BRL**), indicating that initial purchases skew toward larger durable goods while repeat orders skew toward smaller, replenishable items (yielding ~1.8x higher cumulative LTV).
+- **Why It Matters:** Relying on 97% one-time buyers makes Olist vulnerable to rising Customer Acquisition Costs (CAC). Even a modest lift in retention (e.g., doubling repeat rate from 3% to 6%) would generate thousands of incremental orders with minimal marketing spend.
+- **Actionable Recommendations:**
+  1. Launch an automated **post-delivery retention workflow (Day 14–30)** targeting satisfied first-time buyers (4–5 star reviewers) in replenishable categories (`health_beauty`, `bed_bath_table`, `pet_shop`) with a time-bound voucher for their second order.
+  2. Build platform-level brand recognition (loyalty points or cross-seller free shipping) so buyers associate positive experiences with Olist rather than individual third-party merchants.
+- **Confidence & Limitations:** **Moderate-to-High confidence.** *Limitation:* Because the observation window spans 20 months, customers acquired in mid-to-late 2018 suffer from **right-censoring** (insufficient elapsed time to observe a second purchase), meaning long-term retention is slightly understated.
+
+---
+
+### Finding 7 (Q5): Credit Card Installment Plans Act as the Primary Conversion Engine for High-Ticket Orders
+- **Quantitative Evidence:** Across **98,206 valid orders** with payment records (classified by primary payment method with highest `payment_value`), **credit cards (`credit_card`)** dominate at **75.47%** (74,116 orders) and generate the highest average transaction value (**166.64 BRL**, median **109.51 BRL**), followed by cash payment slips (**`boleto`**) at **19.90%** (19,539 orders, avg **144.67 BRL**). Together, `credit_card` and `boleto` account for **95.37%** of all orders (`voucher`: 3.09%; `debit_card`: 1.54%). Within credit card transactions, **67.99%** utilize multi-month installments ($\ge 2$ periods), with average order value scaling over **4x** alongside installment duration:
+  - **1 installment (32.01% of card orders):** Avg **100.78 BRL** (median **71.63 BRL**)
+  - **8 installments:** Avg **309.00 BRL** (median **212.91 BRL**)
+  - **10 installments:** Avg **414.76 BRL** (median **240.22 BRL**)
+- **Why It Matters:** Interest-free installment financing is culturally ingrained in Brazilian e-commerce and serves as the critical affordability lever enabling shoppers to purchase high-ticket items (`watches_gifts`, `computers_accessories`, `furniture_decor`).
+- **Actionable Recommendations:**
+  1. Prominently display **monthly installment pricing** (e.g., *"10x of 41.48 BRL interest-free"*) directly on product search cards and checkout pages for items priced above **200 BRL**.
+  2. Co-fund promotional 6–10x installment campaigns with top sellers in high-ticket categories while monitoring financing fee structures to protect net unit economics.
+- **Confidence & Limitations:** **High confidence.** *Limitation:* For the 2,961 split-payment orders (e.g., credit card + voucher), classifying by the largest `payment_value` slightly underrepresents secondary voucher usage; additionally, merchant discount rates (MDR) and installment financing costs are not recorded in the dataset.
+
+---
+
+## 4. Prioritized Action Roadmap
+
+| Priority | Strategic Initiative | Target Segment | Expected Business Impact | Implementation Effort |
+| :--- | :--- | :--- | :--- | :--- |
+| **P1 (Immediate)** | **15-Day Transit SLA Alerts & `SP` $\rightarrow$ `RJ` Carrier Reallocation** | Orders >15 days in transit; `RJ` interstate lanes (12,350 orders) | Reduces >20-day cliff delays; lifts `RJ` & platform review scores | **Medium** (Ops & carrier SLA routing) |
+| **P2 (Short-Term)** | **Second-Order Retention Voucher Campaign** | 4–5 star first-time buyers in `health_beauty`, `bed_bath_table`, `pet_shop` | Lifts repeat customer rate above 3.04% at near-zero CAC | **Low** (CRM email automation) |
+| **P3 (Short-Term)** | **160 BRL Free-Shipping Threshold & Checkout Cross-Sell Bundles** | High-volume, low-AOV markets (`SP` at 125.57 BRL) | Breaks AOV stagnation (137.41 BRL $\rightarrow$ 150+ BRL) | **Low–Medium** (Cart UI & promo rules) |
+| **P4 (Medium-Term)** | **Prominent 6–10x Installment Merchandising & Regional Seller Expansion** | High-ticket categories (>200 BRL); non-`SP` states | Increases high-ticket conversion & lowers interstate freight | **Medium–High** (Seller acquisition) |
